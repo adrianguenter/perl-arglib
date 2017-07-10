@@ -1,6 +1,14 @@
-package AGLib::SysInfo;
+package My::SysInfo;
+
 use strict;
 use warnings;
+use 5.018;
+
+use Cwd       qw(abs_path);
+
+use My::Base  qw(:all);
+use My::File;
+use My::UI;
 
 use Sub::Exporter::Progressive -setup => {
   exports => [qw(cpuinfo linux_version pci_devs_by_class pci_ids pci_vga_devices)],
@@ -23,8 +31,8 @@ sub cpuinfo {
       $line =~ /(?<name>\w+(?:\s+\w+)*)\s*: (?<value>.+)/;
       $cpu->{$+{name}} = $+{value};
     }
-    if defined $cpus[$cpu->{'physical id'}] {
-      push $cpus[$cpu->{'physical id'}]{core_list}, $cpu->{processor};
+    if (defined $cpus[$cpu->{'physical id'}]) {
+      push @{$cpus[$cpu->{'physical id'}]{core_list}}, $cpu->{processor};
       next;
     }
     $cpus[$cpu->{'physical id'}] = {
@@ -62,13 +70,13 @@ sub linux_version {
 }
 
 sub pci_devs_by_class {
-  @_ && $_[0] =~ RE_HEX_BYTE or FATAL 'First argument is required';
+  @_ && $_[0] =~ $RE_HEX_BYTE or FATAL 'First argument is required';
   my $class    = shift;
-  my $subclass = @_ && $_[0] =~ RE_HEX_BYTE ? shift : undef;
-  my $prog_if  = @_ && $_[0] =~ RE_HEX_BYTE ? shift : undef;
+  my $subclass = @_ && $_[0] =~ $RE_HEX_BYTE ? shift : undef;
+  my $prog_if  = @_ && $_[0] =~ $RE_HEX_BYTE ? shift : undef;
   my $class_exp    = $class;
-  my $subclass_exp = RE_HEX_BYTE;
-  my $progif_exp   = RE_HEX_BYTE;
+  my $subclass_exp = $RE_HEX_BYTE;
+  my $progif_exp   = $RE_HEX_BYTE;
   my @host_bridges = glob('/sys/devices/pci[0-9a-f][0-9a-f][0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]');
   my @devs = ();
   my $result = \@devs;
@@ -132,10 +140,10 @@ sub pci_ids {
     $path = abs_path __DIR__ . '/../pci.ids';
     assert_readable $path;
   }
-  my $vendor_exp = RE_HEX_2BYTES; # or a dynamic list of 'vid1|vid2|vid3|...'
-  my $device_exp = RE_HEX_2BYTES; # or a dynamic list generated at the end of vendor block (around undef $curr_device)
-  my $subvendor_exp = RE_HEX_2BYTES; # or a dynamic list generated at the end of device block
-  my $subdevice_exp = RE_HEX_2BYTES; # or a dynamic list generated at the end of device block
+  my $vendor_exp = $RE_HEX_2BYTES; # or a dynamic list of 'vid1|vid2|vid3|...'
+  my $device_exp = $RE_HEX_2BYTES; # or a dynamic list generated at the end of vendor block (around undef $curr_device)
+  my $subvendor_exp = $RE_HEX_2BYTES; # or a dynamic list generated at the end of device block
+  my $subdevice_exp = $RE_HEX_2BYTES; # or a dynamic list generated at the end of device block
   my %vendors = ();
   my $result = \%vendors; # this should change further down if filter(s) are specified
                           # return a single device/subsys hash, or list of hashes in that case!
@@ -198,7 +206,7 @@ sub pci_ids {
         raw_id             => $+{subdevice_raw},      # 4-char hex string
         name               => $+{subsystem_name},
       };
-    } elsif ($line =~ /^C ${\(RE_HEX_BYTE)}\s+/) {
+    } elsif ($line =~ /^C ${RE_HEX_BYTE}\s+/) {
       last; # exit the loop when we reach the class definitions
     } else {
       # should we ignore lines we can't parse instead of dying?
@@ -258,3 +266,6 @@ sub pci_vga_devices {
   }
   return $result;
 }
+
+1;
+

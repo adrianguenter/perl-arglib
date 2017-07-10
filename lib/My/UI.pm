@@ -1,7 +1,8 @@
-package AGLib::UI;
+package My::UI;
+
 use strict;
 use warnings;
-use 5.015;
+use 5.018;
 
 use Sub::Exporter::Progressive -setup => {
   exports => [qw(tags2esc FATAL WARN INFO DEBUG)],
@@ -54,3 +55,6 @@ sub INFO {
 sub DEBUG {
   say STDERR color('blue bold'), 'Debug: ', color('reset rgb444'), tags2esc(@_), color('reset');
 }
+
+1;
+

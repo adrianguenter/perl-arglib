@@ -1,7 +1,11 @@
-package AGLib::File;
+package My::File;
+
 use strict;
 use warnings;
-use 5.015;
+use 5.018;
+
+use My::Base;
+use My::UI;
 
 use Sub::Exporter::Progressive -setup => {
   exports => [qw(assert_readable slurp)],
@@ -37,3 +41,6 @@ sub slurp {
   close $fh;
   return $slurp;
 }
+
+1;
+
