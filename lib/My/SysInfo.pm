@@ -4,9 +4,12 @@ use strict;
 use warnings;
 use 5.018;
 
-use Cwd       qw(abs_path);
+use Cwd             qw(abs_path);
+use Data::Dumper    qw(Dumper);
+use File::Basename;
+use File::Find;
 
-use My::Base  qw(:all);
+use My::Base     qw(:all);
 use My::File;
 use My::UI;
 
@@ -36,17 +39,17 @@ sub cpuinfo {
       next;
     }
     $cpus[$cpu->{'physical id'}] = {
+      x64        => $cpu->{flags} =~ /\blm\b/,
+      hvm        => $cpu->{flags} =~ /\b(vmx|svm)\b/,
+      vendor     => $cpu->{vendor_id},
+      flags      => $cpu->{flags},
+      core_count => $cpu->{'cpu cores'},
+      core_list  => [$cpu->{processor}],
+      cache_size => $cpu->{'cache size'},
+      model_name => $cpu->{'model name'},
+      threads_per_core => int($cpu->{siblings} / $cpu->{'cpu cores'}),
       freq_max => slurp(
         '/sys/devices/system/cpu/cpu'.$cpu->{processor}.'/cpufreq/cpuinfo_max_freq'),
-      vendor => $cpu->{vendor_id},
-      flags => $cpu->{flags},
-      core_count => $cpu->{'cpu cores'},
-      core_list => @{[$cpu->{processor}]},
-      cache_size => $cpu->{'cache size'},
-      threads_per_core => int($cpu->{siblings} / $cpu->{'cpu cores'}),
-      model_name => $cpu->{'model name'},
-      x64 => $cpu->{flags} =~ /\blm\b/,
-      hvm => $cpu->{flags} =~ /\b(vmx|svm)\b/,
     };
   }
   return @cpus;
