@@ -1,13 +1,15 @@
 package My::SysInfo;
 
-use strict;
-use warnings;
 use 5.018;
+use utf8;
+use warnings;
 
 use Cwd             qw(abs_path);
 use Data::Dumper    qw(Dumper);
 use File::Basename;
 use File::Find;
+use Term::ANSIColor;
+use Test::More;
 
 use My::Base     qw(:all);
 use My::File;
@@ -136,87 +138,217 @@ sub pci_ids {
   # - Add filter support to speed up process (vendor, vendor+device, vendor+device+subvendor, vendor+device+subvendor+subdevice)
   # - Multiple filter capability would be ideal so a list of devices to grab can be given
   #
-  my $path = '';
-  if (-r '/usr/share/hwdata/pci.ids') {
-    $path = '/usr/share/hwdata/pci.ids';
-  } else {
+  my $path = '/usr/share/hwdata/pci.ids';
+  if (not -r $path) {
     $path = abs_path __DIR__ . '/../pci.ids';
     assert_readable $path;
   }
-  my $vendor_exp = $RE_HEX_2BYTES; # or a dynamic list of 'vid1|vid2|vid3|...'
-  my $device_exp = $RE_HEX_2BYTES; # or a dynamic list generated at the end of vendor block (around undef $curr_device)
-  my $subvendor_exp = $RE_HEX_2BYTES; # or a dynamic list generated at the end of device block
-  my $subdevice_exp = $RE_HEX_2BYTES; # or a dynamic list generated at the end of device block
-  my %vendors = ();
-  my $result = \%vendors; # this should change further down if filter(s) are specified
-                          # return a single device/subsys hash, or list of hashes in that case!
-  my $curr_vendor;
-  my $curr_device;
-  open my $fh, '<', $path;
-  while (my $line = <$fh>) {
-    chomp($line);
-    if ($line eq '' or $line =~ /^(?:\s*#|\s+$)/) {
-      next; # ignore blank lines and comments
-    } elsif ($line =~ / # match and process vendor lines
-      ^(?<vendor_raw>${vendor_exp})
-      \s+(?<vendor_name>.*)
-      \s*$
-    /x) {
-      my $vendor_int = hex($+{vendor_raw});
-      $curr_vendor = $vendors{$vendor_int} = {
-        id      => $vendor_int,     # integer
-        raw_id  => $+{vendor_raw},  # 4-char hex string
-        name    => $+{vendor_name},
-        devices => {}
-      };
-      undef $curr_device; # clear $curr_device here for proper subsystem matching
-    } elsif ($line =~ / # match and process device lines
-      ^\t(?<device_raw>${device_exp})
-      \s+(?<device_name>.*)
-      \s*$
-    /x) {
-      $curr_vendor or FATAL 
-        qq(No vendor defined while parsing <b>${path}</b> at line <b>${.}</b>: ), "\n",
-        color('white'), $line;
-      my $device_int = hex($+{device_raw});
-      $curr_device = $curr_vendor->{devices}{$device_int} = {
-        vendor_id     => $curr_vendor->{id},     # integer
-        vendor_raw_id => $curr_vendor->{raw_id}, # 4-char hex string
-        id            => $device_int,            # integer
-        raw_id        => $+{device_raw},         # 4-char hex string
-        name          => $+{device_name},
-        subsystems    => {}
-      };
-    } elsif ($line =~ / # match and process subsystem lines
-      ^\t\t(?<subvendor_raw>${subvendor_exp})
-      \s+(?<subdevice_raw>${subdevice_exp})
-      \s+(?<subsys_name>.*)
-      \s*$
-    /x) {
-      $curr_device or FATAL
-        qq(No device defined while parsing <b>${path}</b> at line <b>${.}</b>: ), "\n",
-        color('white'), $line;
-      my $subvendor_int = hex($+{subvendor_raw});
-      my $subdevice_int = hex($+{subdevice_raw});
-      $curr_device->{subsystems}{@{[$subvendor_int, $subdevice_int]}} = {
-        supravendor_id     => $curr_vendor->{id},     # integer
-        supravendor_raw_id => $curr_vendor->{raw_id}, # 4-char hex string
-        supradevice_id     => $curr_device->{id},     # integer
-        supradevice_raw_id => $curr_device->{raw_id}, # 4-char hex string
-        vendor_id          => $subvendor_int,         # integer
-        vendor_raw_id      => $+{subvendor_raw},      # 4-char hex string
-        id                 => $subdevice_int,         # integer
-        raw_id             => $+{subdevice_raw},      # 4-char hex string
-        name               => $+{subsystem_name},
-      };
-    } elsif ($line =~ /^C ${RE_HEX_BYTE}\s+/) {
-      last; # exit the loop when we reach the class definitions
-    } else {
-      # should we ignore lines we can't parse instead of dying?
-      FATAL qq(Failed parsing <b>${path}</b> at line <b>${.}</b>: ), "\n",
-        color('white'), $line;
+  #
+  # pci_ids 'vid:did:svid:sdid' 'vid'
+  #
+  my $vendor_exp = '';
+  my $device_exp = '';
+  my $subvendor_exp = '';
+  my $subdevice_exp = '';
+  $vendor_exp = $RE_HEX_2BYTES; # or a dynamic list of 'vid1|vid2|vid3|...'
+  $device_exp = $RE_HEX_2BYTES; # or a dynamic list generated at the end of vendor block (around undef $curr_device)
+  $subvendor_exp = $RE_HEX_2BYTES; # or a dynamic list generated at the end of device block
+  $subdevice_exp = $RE_HEX_2BYTES; # or a dynamic list generated at the end of device block 
+
+  my %filter = (); # {vendor_exp => {device_exp => {subvendor_exp => [subdevice_exp]}}}
+  if (@_) {
+    for my $arg (@_) {
+      my ($vid, $did, $svid, $sdid) = split /:/, $arg;
+
+      if (defined $vid and $vid ne '' and $vid ne '*') {
+        $vid = sprintf('%04x', hex($vid));
+      } else {
+        $vid = '*';
+      }
+      $filter{$vid} = () unless exists $filter{$vid};
+
+      if (defined $did) {
+        do { $filter{$vid} = '-'; next } if $did eq '-';
+        $did = sprintf('%04x', hex($did)) if $did ne '' and $did ne '*';
+      } else {
+        $did = '*';
+      }
+      $filter{$vid}{$did} = () unless exists $filter{$vid}{$did};
+
+      if (defined $svid) {
+        do { $filter{$vid}{$did} = '-'; next } if $svid eq '-';
+        $svid = sprintf('%04x', hex($svid)) if $svid ne '' and $svid ne '*';
+      } else {
+        $svid = '*';
+      }
+      $filter{$vid}{$did}{$svid} = () unless exists $filter{$vid}{$did}{$svid};
+
+      if (defined $sdid and $sdid ne '' and $sdid ne '*') {
+        push @{$filter{$vid}{$did}{$svid}}, sprintf('%04x', hex($sdid));
+      } else {
+        @{$filter{$vid}{$did}{$svid}} = ($RE_HEX_2BYTES);
+      }
     }
+  } else {
+    $filter{'*'} = { '*' => { '*' => ('*'), }, };
   }
+  #say Dumper(\%filter);
+  #say Dumper(join '|', keys %filter);
+  #say Dumper(exists($filter{'10de'}), join('|', keys %{$filter{'10de'}}));
+
+  my %vendors = ();
+  my $result = \%vendors;
+
+  open my $fh, '<', $path;
+
+#  {
+#      $result->{string} = $line;
+#
+#      if ($line =~ /^(?<id>${RE_HEX_2BYTES})\s+(?<name>.*)\s*$/) {
+#        $result->{type} = 'VENDOR';
+#        $result->{id}   = $+{id};
+#        $result->{name} = $+{name};
+#      }
+#      elsif ($line =~ /^\t(?<id>${RE_HEX_2BYTES})\s+(?<name>.*)\s*$/) {
+#        $result->{type} = 'DEVICE';
+#        $result->{id}   = $+{id};
+#        $result->{name} = $+{name};
+#      }
+#      elsif ($line =~ /^\t\t(?<vid>${RE_HEX_2BYTES})\s+(?<did>${RE_HEX_2BYTES})\s+(?<name>.*)\s*$/) {
+#        $result->{type} = 'SUBSYS';
+#        $result->{vid}  = $+{vid};
+#        $result->{did}  = $+{did};
+#        $result->{name} = $+{name};
+#      }
+#      elsif ($line =~ /^C ${RE_HEX_BYTE}\s+/) {
+#        $result->{type} = 'CLASS';
+#      } else {
+#        next;
+#      }
+#
+#	  next if %wanted and not exists $wanted{$result->{type}};
+#
+  #    return $result;
+  #  }
+  #}
+
+  my ($vendor, $device, $class, $subclass);
+
+  my %wanted;
+  @wanted{('VENDOR', 'CLASS')} = undef;
+  while (my $line = <$fh>) {
+    chomp $line;
+    next unless length $line >= 6;
+    my $hint = substr $line, 0, 2;
+    # Class
+    if (exists $wanted{'CLASS'} and $hint eq 'C ' 
+      and substr($line, 2) =~ /^${RE_HEX_BYTE}\s/
+    ) {
+      delete $wanted{'VENDOR'};
+      delete $wanted{'DEVICE'};
+      delete $wanted{'SUBSYS'};
+      last; # TODO: Remove and fix class parsing in future
+      undef $vendor;
+      undef $device;
+      # $class = ...
+      #print 'C';
+      next;
+    }
+    # Subsystem (under device) or prog-if (under subclass)
+    if ($hint eq "\t\t") {
+      if (exists $wanted{'SUBSYS'} and $device 
+        and $line =~ /^\t\t(?<vid>${RE_HEX_2BYTES})\s+(?<did>${RE_HEX_2BYTES})\s+(?<name>.*)\s*$/
+      ) {
+        $device->{subsystems}{$+{vid} . ':' . $+{did}} = {
+          vendor_id => $+{vid},
+          device_id => $+{did},
+          supravendor_id => $vendor->{id},
+          supradevice_id => $device->{id},
+          name => $+{name},
+        };
+      } elsif (exists $wanted{'PROG-IF'} and $subclass) {
+        # ...
+      }
+      next;
+    }
+    $hint = substr($line, 0, 1);
+    # Device (under vendor) or subclass (under class)
+    if ($hint eq "\t") {
+      if (exists $wanted{'DEVICE'} and $vendor 
+        and $line =~ /^\t(?<id>${RE_HEX_2BYTES})\s+(?<name>.*)\s*$/
+      ) {
+        delete $wanted{'SUBSYS'};
+        if (%filter and exists $filter{$vendor->{id}}
+          and not exists $filter{$vendor->{id}}{'*'} 
+          and not exists $filter{$vendor->{id}}{$+{id}}) {
+          next;
+        }
+        $wanted{'SUBSYS'} = undef unless %filter
+          and exists $filter{$vendor->{id}}{'*'} && $filter{$vendor->{id}} eq '-'
+          or exists $filter{$vendor->{id}}{$+{id}} && $filter{$vendor->{id}}{$+{id}} eq '-';
+        $device = $vendor->{devices}{$+{id}} = {
+          id => $+{id},
+          vendor_id => $vendor->{id},
+          name => $+{name},
+          subsystems => exists $wanted{'SUBSYS'} ? {} : '-',
+        };
+      } elsif (exists $wanted{'SUBCLASS'} and $class) {
+        # $subclass = ...
+      }
+      next;
+    }
+    # Vendor
+    if (exists $wanted{'VENDOR'} and $hint ne '#' 
+      and $line =~ /^(?<id>${RE_HEX_2BYTES})\s+(?<name>.*)\s*$/
+    ) { # wanted = VENDOR, DEVICE, CLASS
+      delete $wanted{'DEVICE'};
+      delete $wanted{'SUBSYS'};
+      if (%filter and not exists $filter{'*'} and not exists $filter{$+{id}}) {
+        next;
+      }
+      $wanted{'DEVICE'} = undef unless %filter 
+        and exists $filter{'*'} && $filter{'*'} eq '-'
+        or exists $filter{$+{id}} && $filter{$+{id}} eq '-';
+      $vendor = $vendors{$+{id}} = {
+        id => $+{id},
+        name => $+{name},
+        devices => exists $wanted{'DEVICE'} ? {} : '-',
+      };
+      next;
+    }
+    # ? Unknown, implicit next
+  }
+  
+  #$vendor_exp = join '|', keys %filter;
+  #$l = $next->('VENDOR'); # Cue first vendor
+  #while ($l and $l->{type} eq 'VENDOR') {
+  #  $vendor = $vendors{$l->{id}} = {
+  #    id => $l->{id},
+  #    name => $l->{name},
+  #    devices => {}
+  #  };
+  #  $l = $next->('DEVICE', 'VENDOR'); # Cue first device in vendor (or next vendor)
+  #  while ($l and $l->{type} eq 'DEVICE') {
+  #    $device = $vendor->{devices}{$l->{id}} = {
+  #      id => $l->{id},
+  #      vendor_id => $vendor->{id},
+  #      name => $l->{name},
+  #      subsystems => {}
+  #    };
+  #    $l = $next->('SUBSYS', 'DEVICE', 'VENDOR'); # Cue first subsystem in device (or next device, or vendor)
+  #    while ($l and $l->{type} eq 'SUBSYS') {
+  #      $device->{subsystems}{$l->{vid} . ':' . $l->{did}} = {
+  #        vendor_id => $l->{vid},
+  #        device_id => $l->{did},
+  #        supravendor_id => $vendor->{id},
+  #        supradevice_id => $device->{id},
+  #        name => $l->{name}
+  #      };
+  #      $l = $next->('SUBSYS', 'DEVICE', 'VENDOR');
+  #    }
+  #  }
+  #}
+
   return $result;
 }
 
@@ -271,4 +403,3 @@ sub pci_vga_devices {
 }
 
 1;
-

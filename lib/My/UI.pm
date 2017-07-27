@@ -1,8 +1,12 @@
 package My::UI;
 
-use strict;
-use warnings;
 use 5.018;
+use utf8;
+use warnings;
+
+use Term::ANSIColor;
+
+use My::Base;
 
 use Sub::Exporter::Progressive -setup => {
   exports => [qw(tags2esc FATAL WARN INFO DEBUG)],

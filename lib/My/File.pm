@@ -1,8 +1,8 @@
 package My::File;
 
-use strict;
-use warnings;
 use 5.018;
+use utf8;
+use warnings;
 
 use My::Base;
 use My::UI;
@@ -42,5 +42,10 @@ sub slurp {
   return $slurp;
 }
 
-1;
+#sub slurp_fh {
+#  local $/ = undef;
+# 
+#  return <$fh>;
+#}
 
+1;
